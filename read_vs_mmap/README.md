@@ -1,0 +1,6 @@
+- Learn how to create an env to benchmark the executable
+- Need to build the following:
+  - create a very large file
+  - run the benchmark
+- Would want to use syscall tracers etc
+- Build in release fast mode
