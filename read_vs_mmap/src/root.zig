@@ -42,9 +42,9 @@ pub const Runner = struct {
         defer allocator.free(cwd_path);
         debugPrint("cwd: {s}, filepath: {s} filesize(in kb): {d}\n", .{ cwd_path, filepath, filesize_wanted_in_kb });
 
-        var one_kb_buffer: [1024]u8 = undefined;
-        crypto.random.bytes(one_kb_buffer[0..]);
-        debugPrint("random string slice check: {any}\n", .{one_kb_buffer[0..5]});
+        var eight_kb_buffer: [1024 * 8]u8 = undefined;
+        crypto.random.bytes(eight_kb_buffer[0..]);
+        debugPrint("random string slice check: {any}\n", .{eight_kb_buffer[0..5]});
 
         const new_file = try cwd.createFile(filepath, .{
             .exclusive = true,
@@ -52,9 +52,9 @@ pub const Runner = struct {
         });
         var written_kb: u64 = 0;
         while (written_kb < filesize_wanted_in_kb) {
-            crypto.random.bytes(one_kb_buffer[0..]);
-            _ = try new_file.write(&one_kb_buffer);
-            written_kb += 1;
+            crypto.random.bytes(eight_kb_buffer[0..]);
+            _ = try new_file.write(&eight_kb_buffer);
+            written_kb += 8;
         }
         debugPrint("file generated\n", .{});
     }
