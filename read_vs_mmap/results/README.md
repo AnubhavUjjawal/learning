@@ -128,4 +128,4 @@ user    0m0.268s
 sys     0m0.985s
 ```
 
-- [This trace](./mmapcalltrace.svg) was taken when doing random reads a 4GB file in 16KB blocks 100000 times on RPI 5.
+- [This trace](./mmapcalltrace.svg) was taken when doing random reads on a 4GB file in 16KB blocks 100000 times on RPI 5.

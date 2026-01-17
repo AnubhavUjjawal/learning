@@ -18,12 +18,13 @@ pub fn debugPrint(comptime fmtstring: []const u8, args: anytype) void {
     }
 }
 
-pub const errors = error{ InvalidCommand, NoFilenameOrSizeProvided, NoFilenameOrReadBlockSizeProvided, FileExists };
+pub const errors = error{ InvalidCommand, NoFilenameOrSizeProvided, NoFilenameOrReadBlockSizeProvided, FileExists, ShortReadError };
 
 /// This runner includes very basic command parsing
 pub const Runner = struct {
     const generate_file_cmd = "generate-file";
     const read_file_mmap_cmd = "read-file-mmap";
+    const read_file_pread_cmd = "read-file-pread";
 
     pub fn run(allocator: mem.Allocator, cmd: []u8, args: [][:0]u8) !void {
         if (std.mem.eql(u8, cmd, generate_file_cmd)) {
@@ -32,8 +33,49 @@ pub const Runner = struct {
         } else if (std.mem.eql(u8, cmd, read_file_mmap_cmd)) {
             debugPrint("reading the large file using mmap\n", .{});
             try read_file_mmap(allocator, args);
+        } else if (std.mem.eql(u8, cmd, read_file_pread_cmd)) {
+            debugPrint("reading the large file using pread\n", .{});
+            try read_file_pread(allocator, args);
         } else {
             return errors.InvalidCommand;
+        }
+    }
+
+    /// args[0] is filename, args[1] is the blocksize in KB
+    /// args[2] is the number of iterations we want to do.
+    pub fn read_file_pread(allocator: mem.Allocator, args: [][:0]u8) !void {
+        if (args.len != 3) {
+            return errors.NoFilenameOrReadBlockSizeProvided;
+        }
+
+        const filepath = args[0];
+        const blocksize = try fmt.parseInt(usize, args[1], 10);
+        const iterations = try fmt.parseInt(usize, args[2], 10);
+        debugPrint("filepath: {s}, blocksize: {d}, iterations: {d}\n", .{ filepath, blocksize, iterations });
+        const cwd = fs.cwd();
+        const file_stat = try cwd.statFile(filepath);
+        debugPrint("filestat: {any}\n", .{file_stat});
+        const file = try cwd.openFile(filepath, .{
+            .mode = .read_only,
+            .lock = .exclusive,
+        });
+        defer file.close();
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        debugPrint("seed: {d}\n", .{seed});
+        // now, we want to do random reads of size `blocksize` multiple times.
+        var prng: Random.DefaultPrng = .init(seed);
+        const rand = prng.random();
+        var search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
+        const read_buffer = try allocator.alloc(u8, blocksize * 1024);
+        var read: usize = 0;
+        defer allocator.free(read_buffer);
+        for (0..iterations) |_| {
+            read = try posix.pread(file.handle, read_buffer, search_idx);
+            if (read != read_buffer.len) {
+                return errors.ShortReadError;
+            }
+            search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
         }
     }
 
@@ -55,6 +97,7 @@ pub const Runner = struct {
             .mode = .read_only,
             .lock = .exclusive,
         });
+        defer file.close();
         const mmap_p = try posix.mmap(null, file_stat.size, posix.PROT.READ, .{
             .TYPE = .PRIVATE,
         }, file.handle, 0);
