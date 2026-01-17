@@ -93,6 +93,13 @@ pub const Runner = struct {
         const read_buffer = try allocator.alloc(u8, blocksize * 1024);
         var read: usize = 0;
         defer allocator.free(read_buffer);
+
+        switch (builtin.target.os.tag) {
+            .linux => {
+                _ = os.linux.fadvise(file.handle, 0, file_stat.size, os.linux.POSIX_FADV.RANDOM);
+            },
+            else => {},
+        }
         for (0..iterations) |_| {
             read = try posix.pread(file.handle, read_buffer, search_idx);
             if (read != read_buffer.len) {
