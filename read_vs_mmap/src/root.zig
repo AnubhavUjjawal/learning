@@ -130,6 +130,7 @@ pub const Runner = struct {
         const mmap_p = try posix.mmap(null, file_stat.size, posix.PROT.READ, .{
             .TYPE = .PRIVATE,
         }, file.handle, 0);
+        _ = try posix.madvise(mmap_p.ptr, mmap_p.len, posix.MADV.RANDOM);
         defer posix.munmap(mmap_p);
         debugPrint("initial byte: {s}, mmap len: {d}\n", .{ mmap_p[0..8], mmap_p.len });
         var seed: u64 = undefined;
