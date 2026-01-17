@@ -128,4 +128,57 @@ user    0m0.268s
 sys     0m0.985s
 ```
 
-- [This trace](./mmapcalltrace.svg) was taken when doing random reads on a 4GB file in 16KB blocks 100000 times on RPI 5.
+- [This trace](./mmapcalltrace.svg) was taken when doing random mmap reads on a 4GB file in 16KB blocks 100000 times on RPI 5.
+
+```
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1664480     2066192      171040     4842304     6591984
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo strace -c ./zig-out/bin/read_vs_mmap read-file-pread build.random 16 100000
+[debug]: reading the large file using pread
+[debug]: filepath: build.random, blocksize: 16, iterations: 100000
+[debug]: filestat: .{ .inode = 1069678, .size = 4294967296, .mode = 33204, .kind = .file, .atime = 1768635170826926264, .mtime = 1768635216690910817, .ctime = 1768635216690910817 }
+[debug]: seed: 13226640330908188399
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 99.97    1.738837          17    100000           pread64
+  0.02    0.000272         272         1           execve
+  0.00    0.000065           6        10           writev
+  0.00    0.000057           8         7           mmap
+  0.00    0.000029           9         3           openat
+  0.00    0.000028           9         3           mprotect
+  0.00    0.000025          25         1           statx
+  0.00    0.000024           8         3           munmap
+  0.00    0.000014           2         5           rt_sigaction
+  0.00    0.000013           4         3           close
+  0.00    0.000012           4         3           brk
+  0.00    0.000011           3         3           prlimit64
+  0.00    0.000010           5         2           fstat
+  0.00    0.000009           4         2           rt_sigprocmask
+  0.00    0.000008           4         2           getrandom
+  0.00    0.000006           6         1           flock
+  0.00    0.000006           6         1         1 faccessat
+  0.00    0.000005           5         1           read
+  0.00    0.000004           4         1           gettid
+  0.00    0.000004           4         1           rseq
+  0.00    0.000003           3         1           set_tid_address
+  0.00    0.000003           3         1           set_robust_list
+------ ----------- ----------- --------- --------- ----------------
+100.00    1.739445          17    100055         1 total
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1676224     2710144      171056     4188608     6580240
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-pread build.random 16 100000
+[debug]: reading the large file using pread
+[debug]: filepath: build.random, blocksize: 16, iterations: 100000
+[debug]: filestat: .{ .inode = 1069678, .size = 4294967296, .mode = 33204, .kind = .file, .atime = 1768635170826926264, .mtime = 1768635216690910817, .ctime = 1768635216690910817 }
+[debug]: seed: 17069831048482261287
+
+real    0m39.063s
+user    0m0.028s
+sys     0m1.453s
+```
+
+- - [This trace](./preadsyscalltrace.svg) was taken when doing random syscall preads on a 4GB file in 16KB blocks 100000 times on RPI 5.
