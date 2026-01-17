@@ -181,4 +181,4 @@ user    0m0.028s
 sys     0m1.453s
 ```
 
-- - [This trace](./preadsyscalltrace.svg) was taken when doing random syscall preads on a 4GB file in 16KB blocks 100000 times on RPI 5.
+- [This trace](./preadsyscalltrace.svg) was taken when doing random syscall preads on a 4GB file in 16KB blocks 100000 times on RPI 5.

@@ -9,6 +9,11 @@ const os = std.os;
 const fmt = std.fmt;
 
 const Random = std.Random;
+const sixteen_kb_in_bytes = 1024 * 16;
+
+/// Assumption. I didn't have the patience to make it configurable for all systems.
+/// Change according to your needs.
+const os_page_size_in_bytes = sixteen_kb_in_bytes;
 
 /// Only prints if we are NOT in a ReleaseFast or ReleaseSmall mode
 pub fn debugPrint(comptime fmtstring: []const u8, args: anytype) void {
@@ -18,7 +23,7 @@ pub fn debugPrint(comptime fmtstring: []const u8, args: anytype) void {
     }
 }
 
-pub const errors = error{ InvalidCommand, NoFilenameOrSizeProvided, NoFilenameOrReadBlockSizeProvided, FileExists, ShortReadError };
+pub const errors = error{ BlockMustEqualPageSize, InvalidCommand, NoFilenameOrSizeProvided, NoFilenameOrReadBlockSizeProvided, FileExists, ShortReadError };
 
 /// This runner includes very basic command parsing
 pub const Runner = struct {
@@ -26,16 +31,28 @@ pub const Runner = struct {
     const read_file_mmap_cmd = "read-file-mmap";
     const read_file_pread_cmd = "read-file-pread";
 
+    /// --aligned on generate-file command is a no op.
+    /// When doing read tests, this flag reads from aligned pages
+    /// So that when a page fault occurs for mmap test for 16KB block sizes, we read a single page instead of two
+    /// In (Linux rpi1 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64 GNU/Linux) the page size is 16KB
+    const aligned = "--aligned";
+
     pub fn run(allocator: mem.Allocator, cmd: []u8, args: [][:0]u8) !void {
+        var is_aligned_test = false;
+        var args_start_from: usize = 0;
+        if (std.mem.eql(u8, args[0], aligned)) {
+            is_aligned_test = true;
+            args_start_from = 1;
+        }
         if (std.mem.eql(u8, cmd, generate_file_cmd)) {
             debugPrint("generating a large file\n", .{});
             try generate_file(allocator, args);
         } else if (std.mem.eql(u8, cmd, read_file_mmap_cmd)) {
             debugPrint("reading the large file using mmap\n", .{});
-            try read_file_mmap(allocator, args);
+            try read_file_mmap(allocator, args[args_start_from..], is_aligned_test);
         } else if (std.mem.eql(u8, cmd, read_file_pread_cmd)) {
             debugPrint("reading the large file using pread\n", .{});
-            try read_file_pread(allocator, args);
+            try read_file_pread(allocator, args[args_start_from..], is_aligned_test);
         } else {
             return errors.InvalidCommand;
         }
@@ -43,8 +60,8 @@ pub const Runner = struct {
 
     /// args[0] is filename, args[1] is the blocksize in KB
     /// args[2] is the number of iterations we want to do.
-    pub fn read_file_pread(allocator: mem.Allocator, args: [][:0]u8) !void {
-        if (args.len != 3) {
+    pub fn read_file_pread(allocator: mem.Allocator, args: [][:0]u8, is_aligned_test: bool) !void {
+        if (args.len < 3) {
             return errors.NoFilenameOrReadBlockSizeProvided;
         }
 
@@ -52,6 +69,9 @@ pub const Runner = struct {
         const blocksize = try fmt.parseInt(usize, args[1], 10);
         const iterations = try fmt.parseInt(usize, args[2], 10);
         debugPrint("filepath: {s}, blocksize: {d}, iterations: {d}\n", .{ filepath, blocksize, iterations });
+        if (is_aligned_test and blocksize * 1024 != os_page_size_in_bytes) {
+            return errors.BlockMustEqualPageSize;
+        }
         const cwd = fs.cwd();
         const file_stat = try cwd.statFile(filepath);
         debugPrint("filestat: {any}\n", .{file_stat});
@@ -67,6 +87,9 @@ pub const Runner = struct {
         var prng: Random.DefaultPrng = .init(seed);
         const rand = prng.random();
         var search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
+        if (is_aligned_test) {
+            search_idx = (search_idx / os_page_size_in_bytes) * os_page_size_in_bytes;
+        }
         const read_buffer = try allocator.alloc(u8, blocksize * 1024);
         var read: usize = 0;
         defer allocator.free(read_buffer);
@@ -76,13 +99,16 @@ pub const Runner = struct {
                 return errors.ShortReadError;
             }
             search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
+            if (is_aligned_test) {
+                search_idx = (search_idx / os_page_size_in_bytes) * os_page_size_in_bytes;
+            }
         }
     }
 
     /// args[0] is filename, args[1] is the blocksize in KB
     /// args[2] is the number of iterations we want to do.
-    pub fn read_file_mmap(allocator: mem.Allocator, args: [][:0]u8) !void {
-        if (args.len != 3) {
+    pub fn read_file_mmap(allocator: mem.Allocator, args: [][:0]u8, is_aligned_test: bool) !void {
+        if (args.len < 3) {
             return errors.NoFilenameOrReadBlockSizeProvided;
         }
 
@@ -90,6 +116,9 @@ pub const Runner = struct {
         const blocksize = try fmt.parseInt(usize, args[1], 10);
         const iterations = try fmt.parseInt(usize, args[2], 10);
         debugPrint("filepath: {s}, blocksize: {d}, iterations: {d}\n", .{ filepath, blocksize, iterations });
+        if (is_aligned_test and blocksize * 1024 != os_page_size_in_bytes) {
+            return errors.BlockMustEqualPageSize;
+        }
         const cwd = fs.cwd();
         const file_stat = try cwd.statFile(filepath);
         debugPrint("filestat: {any}\n", .{file_stat});
@@ -110,11 +139,17 @@ pub const Runner = struct {
         var prng: Random.DefaultPrng = .init(seed);
         const rand = prng.random();
         var search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
+        if (is_aligned_test) {
+            search_idx = (search_idx / os_page_size_in_bytes) * os_page_size_in_bytes;
+        }
         const read_buffer = try allocator.alloc(u8, blocksize * 1024);
         defer allocator.free(read_buffer);
         for (0..iterations) |_| {
             @memcpy(read_buffer, mmap_p[search_idx..(search_idx + (blocksize * 1024))]);
             search_idx = rand.intRangeAtMost(u64, 0, file_stat.size - (1 + blocksize * 1024));
+            if (is_aligned_test) {
+                search_idx = (search_idx / os_page_size_in_bytes) * os_page_size_in_bytes;
+            }
         }
     }
 
