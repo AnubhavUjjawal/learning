@@ -1,5 +1,5 @@
 - The tests were run on a Raspberry PI 5 (8GB Ram) because I don't own any other linux PC.
-- Buffer caches were dropped before `read` and `mmap` runs
+- Buffer caches were dropped `sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'` before `read` and `mmap` runs
 
 ```
 anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ strace -c ./zig-out/bin/read_vs_mmap generate-file build.random 4096
@@ -73,3 +73,59 @@ Notes:
 
 
 Then use [flame graphs](https://github.com/brendangregg/FlameGraph) to generate SVG
+
+
+- https://unix.stackexchange.com/a/87909/426227 (drop os page cache before reads for cold reads)
+```
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1723024      427280      171008     6497568     6533440
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ strace -c ./zig-out/bin/read_vs_mmap read-file-mmap build.random 16 100000
+[debug]: reading the large file using mmap
+[debug]: filepath: build.random, blocksize: 16, iterations: 100000
+[debug]: filestat: .{ .inode = 1069678, .size = 4294967296, .mode = 33204, .kind = .file, .atime = 1768635170826926264, .mtime = 1768635216690910817, .ctime = 1768635216690910817 }
+[debug]: initial byte: 12345678, mmap len: 4294967296
+[debug]: seed: 16268764965554655849
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.048122       16040         3           munmap
+  0.00    0.000000           0         1           flock
+  0.00    0.000000           0         1         1 faccessat
+  0.00    0.000000           0         3           openat
+  0.00    0.000000           0         2           close
+  0.00    0.000000           0         1           read
+  0.00    0.000000           0        12           writev
+  0.00    0.000000           0         2           fstat
+  0.00    0.000000           0         1           set_tid_address
+  0.00    0.000000           0         1           set_robust_list
+  0.00    0.000000           0         5           rt_sigaction
+  0.00    0.000000           0         2           rt_sigprocmask
+  0.00    0.000000           0         1           gettid
+  0.00    0.000000           0         3           brk
+  0.00    0.000000           0         1           execve
+  0.00    0.000000           0         8           mmap
+  0.00    0.000000           0         3           mprotect
+  0.00    0.000000           0         3           prlimit64
+  0.00    0.000000           0         2           getrandom
+  0.00    0.000000           0         1           statx
+  0.00    0.000000           0         1           rseq
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.048122         844        57         1 total
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1667776     1982976      171040     4923104     6588688
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-mmap build.random 16 100000
+[debug]: reading the large file using mmap
+[debug]: filepath: build.random, blocksize: 16, iterations: 100000
+[debug]: filestat: .{ .inode = 1069678, .size = 4294967296, .mode = 33204, .kind = .file, .atime = 1768635170826926264, .mtime = 1768635216690910817, .ctime = 1768635216690910817 }
+[debug]: initial byte: 12345678, mmap len: 4294967296
+[debug]: seed: 3664577440173585606
+
+real    0m49.477s
+user    0m0.268s
+sys     0m0.985s
+```
+
+- [This trace](./mmapcalltrace.svg) was taken when doing random reads a 4GB file in 16KB blocks 100000 times on RPI 5.
