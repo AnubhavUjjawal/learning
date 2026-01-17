@@ -64,7 +64,7 @@ anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ strace -c -w ./zig-out/bin/read_v
 100.00   42.410161          80    524339         1 total
 ```
 
-- [This trace](./syscalltrace.svg) was taken when creating a 4GB file (filling it with static string) in 8KB blocks on RPI 5.
+- [This trace](./writesyscalltrace.svg) was taken when creating a 4GB file (filling it with static string) in 8KB blocks on RPI 5.
 Notes: 
 - `sudo perf record -g <command to be examined>`
 - sudo makes sure system calls are in the trace

@@ -11,7 +11,11 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 fn getAllocator() std.mem.Allocator {
     // Switch logic based on the build mode
     return switch (builtin.mode) {
-        .Debug, => gpa.allocator(),
+        .Debug,
+        => {
+            read_vs_mmap.debugPrint("using debug allocator \n", .{});
+            return gpa.allocator();
+        },
         // Use a faster, less safe allocator for performance modes
         .ReleaseFast, .ReleaseSmall, .ReleaseSafe => std.heap.c_allocator,
     };
