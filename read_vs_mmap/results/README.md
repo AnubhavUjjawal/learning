@@ -182,3 +182,159 @@ sys     0m1.453s
 ```
 
 - [This trace](./preadsyscalltrace.svg) was taken when doing random syscall preads on a 4GB file in 16KB blocks 100000 times on RPI 5.
+
+```
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1530432     3249280       96800     3653696     6726032
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-pread build.random 16 100000
+
+real    0m34.789s
+user    0m0.014s
+sys     0m1.482s
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1524640     3886560       96800     3024640     6731824
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-mmap build.random 16 100000
+
+real    0m39.625s
+user    0m0.282s
+sys     0m1.805s
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1522944     3877552       96800     3035760     6733520
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-pread --aligned build.random 16 100000
+
+real    0m24.513s
+user    0m0.024s
+sys     0m1.317s
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1542720     4778272       96800     2114400     6713744
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ time ./zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000
+
+real    0m24.908s
+user    0m0.239s
+sys     0m1.115s
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1547568     4757824       96800     2127552     6708896
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e page-faults,major-faults,minor-faults \
+  ./zig-out/bin/read_vs_mmap read-file-pread --aligned build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-pread --aligned build.random 16 100000':
+
+                37      page-faults
+                 1      major-faults
+                36      minor-faults
+
+      24.524290927 seconds time elapsed
+
+       0.016676000 seconds user
+       1.359095000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1577120     4733200       96800     2122592     6679344
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e page-faults,major-faults,minor-faults   ./zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000':
+
+            83,056      page-faults
+            83,020      major-faults
+                36      minor-faults
+
+      24.766600640 seconds time elapsed
+
+       0.240115000 seconds user
+       1.213217000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1525808     4767376       96800     2139776     6730656
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e context-switches   ./zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000':
+
+            83,491      context-switches
+
+      24.336124402 seconds time elapsed
+
+       0.250663000 seconds user
+       1.165584000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1573984     4730960       96800     2127968     6682480
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e context-switches   ./zig-out/bin/read_vs_mmap read-file-pread --aligned build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-pread --aligned build.random 16 100000':
+
+            83,649      context-switches
+
+      24.343639919 seconds time elapsed
+
+       0.012542000 seconds user
+       1.329475000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1537088     4766352       96832     2129456     6719376
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e context-switches   ./zig-out/bin/read_vs_mmap read-file-mmap build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-mmap build.random 16 100000':
+
+           140,288      context-switches
+
+      39.316094776 seconds time elapsed
+
+       0.240258000 seconds user
+       2.018173000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1551296     3834464       96800     3047184     6705168
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e context-switches   ./zig-out/bin/read_vs_mmap read-file-pread build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-pread build.random 16 100000':
+
+            81,175      context-switches
+
+      35.147318162 seconds time elapsed
+
+       0.012514000 seconds user
+       1.539323000 seconds sys
+
+
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo sh -c 'free && sync && echo 3 >/proc/sys/vm/drop_caches'
+               total        used        free      shared  buff/cache   available
+Mem:         8256464     1532544     3865760       96800     3034608     6723920
+Swap:        2097136           0     2097136
+anubhav@rpi1:~/Desktop/learning/read_vs_mmap $ sudo perf stat -e page-faults,major-faults,minor-faults   ./zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000
+
+ Performance counter stats for './zig-out/bin/read_vs_mmap read-file-mmap --aligned build.random 16 100000':
+
+            83,217      page-faults
+            83,182      major-faults
+                35      minor-faults
+
+      24.230830406 seconds time elapsed
+
+       0.274217000 seconds user
+       1.189906000 seconds sys
+```
