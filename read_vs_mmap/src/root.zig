@@ -96,7 +96,7 @@ pub const Runner = struct {
 
         switch (builtin.target.os.tag) {
             .linux => {
-                _ = os.linux.fadvise(file.handle, 0, file_stat.size, os.linux.POSIX_FADV.RANDOM);
+                _ = os.linux.fadvise(file.handle, 0, @intCast(file_stat.size), os.linux.POSIX_FADV.RANDOM);
             },
             else => {},
         }
