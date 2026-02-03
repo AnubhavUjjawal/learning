@@ -25,7 +25,8 @@ pub fn main() !void {
     const allocator = getAllocator();
     // Remember to deinit the GPA if you are in a safe mode
     defer if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
-        _ = gpa.deinit();
+        const no_leaks = gpa.deinit();
+        debug.assert(no_leaks == .ok);
     };
 
     const args = try process.argsAlloc(allocator);
