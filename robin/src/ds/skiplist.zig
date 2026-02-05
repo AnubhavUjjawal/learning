@@ -11,7 +11,6 @@ const logger = log.scoped(.skiplist);
 /// TODO:
 /// - We can potentially make it lock free
 /// - We are wasting memory (fixed number of max_levels)
-/// - The u8 Underflow, use intCasts
 /// - copy T when inserting
 pub fn SkipList(
     comptime T: type,
@@ -19,26 +18,58 @@ pub fn SkipList(
     /// should return true when a < b
     comptime cmp: fn (a: *const T, b: *const T) bool,
 ) type {
+
+    // A Node in SkipList. Stores its next pointers
+    // in memory
     const Node = struct {
         const Self = @This();
 
-        data: ?T,
-        next: [max_levels]?*Self,
+        const alignment = mem.Alignment.of(Self);
+        const ptr_alignment = @alignOf(?*Self);
+        const header_size = mem.alignForward(usize, @sizeOf(Self), ptr_alignment);
 
-        fn setNext(self: *Self, level: u8, next: ?*Self) void {
-            self.next[level] = next;
+        data: ?T,
+        height: u8,
+
+        fn nexts(self: *Self) []?*Self {
+            const ptr_addr = @intFromPtr(self) + header_size;
+            const ptr: [*]?*Self = @ptrFromInt(ptr_addr);
+            return ptr[0..self.height];
         }
 
-        fn getNext(self: *const Self, level: u8) ?*Self {
-            return self.next[level];
+        fn setNext(self: *Self, level: u8, next: ?*Self) void {
+            self.nexts()[level] = next;
+        }
+
+        fn getNext(self: *Self, level: u8) ?*Self {
+            return self.nexts()[level];
         }
 
         fn insertNext(self: *Self, level: u8, next: *Self) void {
-            const current_next = self.next[level];
-            logger.debug("before insert self: {*}, current next: {*}, inserting next: {*}", .{ self, current_next, next });
-            self.next[level] = next;
-            next.next[level] = current_next;
-            logger.debug("after insert self: {*}, current next: {*}, current next next: {*}", .{ self, self.next[level], self.next[level].?.next[level] });
+            const current_next = self.getNext(level);
+            self.setNext(level, next);
+            next.setNext(level, current_next);
+        }
+
+        fn create(allocator: mem.Allocator, data: ?T, height: u8) !*Self {
+            const node_size = header_size + (@sizeOf(?*Self) * height);
+            const bytes = try allocator.alignedAlloc(u8, alignment, node_size);
+            const node: *Self = @ptrCast(@alignCast(bytes.ptr));
+
+            node.* = .{ .data = data, .height = height };
+            // Initialize the trailing pointers to null
+            for (0..node.height) |i| {
+                // std.debug.print("here\n", .{});
+                node.setNext(@as(u8, @intCast(i)), null);
+            }
+            return node;
+        }
+
+        fn destroy(allocator: mem.Allocator, node: *Self) void {
+            const node_size = header_size + (@sizeOf(?*Self) * node.height);
+            const bytes_ptr: [*]align(alignment.toByteUnits()) u8 = @ptrCast(node);
+            const original_allocation = bytes_ptr[0..node_size];
+            allocator.free(original_allocation);
         }
     };
     return struct {
@@ -49,18 +80,14 @@ pub fn SkipList(
         len: usize = 2,
         const Self = @This();
         const compare = cmp;
+
         /// Init(create) a new skip list with the memory allocator.
         ///
         /// TODO(verify): I think using a fixed buffer allocator here would increase cache hit rate.
         pub fn init(allocator: mem.Allocator, prng: std.Random) !Self {
             logger.debug("initialising the skiplist", .{});
-            const head = try allocator.create(Node);
+            const head = try Node.create(allocator, null, max_levels);
             errdefer allocator.destroy(head);
-
-            head.* = Node{ .next = undefined, .data = null };
-            for (0..max_levels) |i| {
-                head.setNext(@as(u8, @intCast(i)), null);
-            }
             return .{ .allocator = allocator, .head = head, .lock = .{}, .prng = prng };
         }
 
@@ -70,8 +97,8 @@ pub fn SkipList(
             var curr: ?*Node = self.head;
             while (curr != null) {
                 const old = curr.?;
-                curr = curr.?.next[0];
-                self.allocator.destroy(old);
+                curr = curr.?.getNext(0);
+                Node.destroy(self.allocator, old);
             }
         }
 
@@ -111,10 +138,8 @@ pub fn SkipList(
             // run prng, if > 0.5, pop last element and continue else break
             //
             curr_level = 0;
-            const node = try self.allocator.create(Node);
+            const node = try Node.create(self.allocator, element, max_levels);
             errdefer self.allocator.destroy(node);
-
-            node.* = .{ .next = undefined, .data = element };
 
             while (stack.items.len > 0) {
                 const elem = stack.pop().?;
@@ -179,7 +204,7 @@ test "sanity test insert int" {
             try testing.expect(prev.?.data.? <= curr.?.data.?);
         }
         prev = curr;
-        curr = curr.?.next[current_level];
+        curr = curr.?.getNext(current_level);
     }
     // l.debugPrint();
 }
@@ -216,7 +241,7 @@ test "sanity test insert string" {
                 (mem.eql(u8, prev.?.data.?, curr.?.data.?) and prev.?.data.?.ptr != curr.?.data.?.ptr));
         }
         prev = curr;
-        curr = curr.?.next[current_level];
+        curr = curr.?.getNext(current_level);
     }
     // l.debugPrint();
 }
