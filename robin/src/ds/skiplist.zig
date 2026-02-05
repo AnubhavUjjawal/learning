@@ -8,6 +8,11 @@ const testing = std.testing;
 const logger = log.scoped(.skiplist);
 
 /// A thread safe skip list implementation
+/// TODO:
+/// - We can potentially make it lock free
+/// - We are wasting memory (fixed number of max_levels)
+/// - The u8 Underflow, use intCasts
+/// - copy T when inserting
 pub fn SkipList(
     comptime T: type,
     comptime max_levels: u8,
@@ -20,7 +25,7 @@ pub fn SkipList(
         data: ?T,
         next: [max_levels]?*Self,
 
-        fn setNext(self: *Self, level: u8, next: *Self) void {
+        fn setNext(self: *Self, level: u8, next: ?*Self) void {
             self.next[level] = next;
         }
 
@@ -39,7 +44,6 @@ pub fn SkipList(
     return struct {
         allocator: mem.Allocator,
         head: *Node,
-        tail: *Node,
         lock: thread.RwLock,
         prng: std.Random,
         len: usize = 2,
@@ -50,18 +54,14 @@ pub fn SkipList(
         /// TODO(verify): I think using a fixed buffer allocator here would increase cache hit rate.
         pub fn init(allocator: mem.Allocator, prng: std.Random) !Self {
             logger.debug("initialising the skiplist", .{});
-            const tail = try allocator.create(Node);
-            errdefer allocator.destroy(tail);
-
-            tail.* = Node{ .next = undefined, .data = null };
             const head = try allocator.create(Node);
             errdefer allocator.destroy(head);
 
             head.* = Node{ .next = undefined, .data = null };
             for (0..max_levels) |i| {
-                head.setNext(@as(u8, @intCast(i)), tail);
+                head.setNext(@as(u8, @intCast(i)), null);
             }
-            return .{ .allocator = allocator, .head = head, .tail = tail, .lock = .{}, .prng = prng };
+            return .{ .allocator = allocator, .head = head, .lock = .{}, .prng = prng };
         }
 
         pub fn deinit(self: *Self) void {
@@ -94,14 +94,13 @@ pub fn SkipList(
             try stack.ensureTotalCapacity(math.log2_int(usize, self.len));
             var curr_node = self.head;
 
-            var curr_level = max_levels - 1;
-            while (curr_level >= 0) {
-                const next = curr_node.getNext(curr_level);
-                if (next != null and next != self.tail and compare(&next.?.data.?, &element)) {
+            var curr_level = max_levels;
+            while (curr_level > 0) {
+                const next = curr_node.getNext(curr_level - 1);
+                if (next != null and compare(&next.?.data.?, &element)) {
                     curr_node = next.?;
                 } else {
                     _ = try stack.append(curr_node);
-                    if (curr_level == 0) break;
                     curr_level -= 1;
                 }
             }
@@ -129,18 +128,19 @@ pub fn SkipList(
             self.len += 1;
         }
 
+        /// A very basic debug print
+        /// We need to improve it
         pub fn debugPrint(self: *const Self) void {
             var curr: ?*Node = self.head;
             var current_level = max_levels - 1;
-            while (current_level >= 0) {
+            while (current_level > 0) {
                 curr = self.head;
                 while (curr != null) {
                     std.debug.print("{any} -> ", .{curr.?.data});
-                    curr = curr.?.next[current_level];
+                    curr = curr.?.next[current_level - 1];
                 }
                 std.debug.print("\n", .{});
 
-                if (current_level == 0) break;
                 current_level -= 1;
             }
         }
