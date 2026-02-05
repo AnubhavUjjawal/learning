@@ -25,10 +25,10 @@ pub fn SkipList(
         const Self = @This();
 
         const alignment = mem.Alignment.of(Self);
-        const ptr_alignment = @alignOf(?*Self);
+        const ptr_alignment = @alignOf(*Self);
         const header_size = mem.alignForward(usize, @sizeOf(Self), ptr_alignment);
 
-        data: ?T,
+        data: T,
         levels: u8,
 
         fn nexts(self: *Self) []?*Self {
@@ -51,8 +51,8 @@ pub fn SkipList(
             next.setNext(level, current_next);
         }
 
-        fn create(allocator: mem.Allocator, data: ?T, levels: u8) !*Self {
-            const node_size = header_size + (@sizeOf(?*Self) * levels);
+        fn create(allocator: mem.Allocator, data: T, levels: u8) !*Self {
+            const node_size = header_size + (@sizeOf(*Self) * levels);
             const bytes = try allocator.alignedAlloc(u8, alignment, node_size);
             const node: *Self = @ptrCast(@alignCast(bytes.ptr));
 
@@ -65,7 +65,7 @@ pub fn SkipList(
         }
 
         fn destroy(allocator: mem.Allocator, node: *Self) void {
-            const node_size = header_size + (@sizeOf(?*Self) * node.levels);
+            const node_size = header_size + (@sizeOf(*Self) * node.levels);
             const bytes_ptr: [*]align(alignment.toByteUnits()) u8 = @ptrCast(node);
             const original_allocation = bytes_ptr[0..node_size];
             allocator.free(original_allocation);
@@ -85,7 +85,7 @@ pub fn SkipList(
         /// TODO(verify): I think using a fixed buffer allocator here would increase cache hit rate.
         pub fn init(allocator: mem.Allocator, prng: std.Random) !Self {
             logger.debug("initialising the skiplist", .{});
-            const head = try Node.create(allocator, null, max_levels);
+            const head = try Node.create(allocator, undefined, max_levels);
             errdefer Node.destroy(allocator, head);
             return .{ .allocator = allocator, .head = head, .lock = .{}, .prng = prng };
         }
@@ -95,9 +95,9 @@ pub fn SkipList(
 
             var curr: ?*Node = self.head;
             while (curr != null) {
-                const old = curr.?;
+                const old = curr;
                 curr = curr.?.getNext(0);
-                Node.destroy(self.allocator, old);
+                Node.destroy(self.allocator, old.?);
             }
         }
 
@@ -113,21 +113,19 @@ pub fn SkipList(
             //    or you find an element larger than current element.
             // 3. if you cannot go down, you need to insert the element here.
             // 4. go down. goto step 2.
-            var stack_unmanaged = std.ArrayList(*Node){};
-            var stack = stack_unmanaged.toManaged(self.allocator);
-            defer stack.deinit();
-
-            try stack.ensureTotalCapacity(math.log2_int(usize, self.len));
+            var stack: [max_levels]*Node = undefined;
+            var stack_idx: i16 = -1;
             var curr_node = self.head;
 
             var curr_level = max_levels;
             while (curr_level > 0) {
                 const next = curr_node.getNext(curr_level - 1);
-                if (next != null and compare(&next.?.data.?, &element)) {
+                if (next != null and compare(&next.?.data, &element)) {
                     curr_node = next.?;
                 } else {
-                    _ = try stack.append(curr_node);
                     curr_level -= 1;
+                    stack_idx += 1;
+                    stack[@as(usize, @intCast(stack_idx))] = curr_node;
                 }
             }
 
@@ -137,7 +135,7 @@ pub fn SkipList(
             // run prng, if > 0.5, pop last element and continue else break
             //
             var levels: u8 = 1;
-            while (levels < stack.items.len) {
+            while (levels < max_levels) {
                 const should_insert = self.prng.boolean();
                 if (!should_insert) break;
                 levels += 1;
@@ -146,7 +144,8 @@ pub fn SkipList(
             errdefer Node.destroy(self.allocator, node);
 
             for (0..levels) |level| {
-                const elem = stack.pop().?;
+                const elem = stack[@as(usize, @intCast(stack_idx))];
+                stack_idx -= 1;
                 elem.insertNext(@as(u8, @intCast(level)), node);
             }
 
@@ -156,13 +155,13 @@ pub fn SkipList(
         /// A very basic debug print
         /// We need to improve it
         pub fn debugPrint(self: *const Self) void {
-            var curr: ?*Node = self.head;
+            var curr: *Node = self.head;
             var current_level = max_levels - 1;
             while (current_level > 0) {
                 curr = self.head;
                 while (curr != null) {
-                    std.debug.print("{any} -> ", .{curr.?.data});
-                    curr = curr.?.getNext(current_level - 1);
+                    std.debug.print("{any} -> ", .{curr.data});
+                    curr = curr.getNext(current_level - 1);
                 }
                 std.debug.print("\n", .{});
 
@@ -191,7 +190,7 @@ test "sanity test insert int" {
     var l = try SkipList(u32, 12, u32Compare).init(allocator, random);
     defer l.deinit();
 
-    const num_inserts = 1000;
+    const num_inserts = 10_000;
     for (0..num_inserts) |_| {
         const num = random.int(u32);
         try l.insert(num);
@@ -202,8 +201,8 @@ test "sanity test insert int" {
     var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
     while (curr != null) {
-        if (prev != null and curr.?.data != null and prev.?.data != null) {
-            try testing.expect(prev.?.data.? <= curr.?.data.?);
+        if (prev != null and prev != l.head) {
+            try testing.expect(prev.?.data <= curr.?.data);
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
@@ -232,9 +231,9 @@ test "sanity test insert string" {
     }
 
     var str: []u8 = undefined;
-    const num_inserts = 1000;
+    const num_inserts = 10_000;
     for (0..num_inserts) |_| {
-        str = try allocator.create([10]u8);
+        str = try allocator.create([100]u8);
         random.bytes(str);
         try managed.append(str);
         try l.insert(str);
@@ -244,9 +243,9 @@ test "sanity test insert string" {
     var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
     while (curr != null) {
-        if (prev != null and curr.?.data != null and prev.?.data != null) {
-            try testing.expect(bytesCompare(&prev.?.data.?, &curr.?.data.?) or
-                (mem.eql(u8, prev.?.data.?, curr.?.data.?) and prev.?.data.?.ptr != curr.?.data.?.ptr));
+        if (prev != null and prev != l.head) {
+            try testing.expect(bytesCompare(&prev.?.data, &curr.?.data) or
+                (mem.eql(u8, prev.?.data, curr.?.data) and prev.?.data.ptr != curr.?.data.ptr));
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
