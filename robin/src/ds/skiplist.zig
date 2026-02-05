@@ -29,12 +29,12 @@ pub fn SkipList(
         const header_size = mem.alignForward(usize, @sizeOf(Self), ptr_alignment);
 
         data: ?T,
-        height: u8,
+        levels: u8,
 
         fn nexts(self: *Self) []?*Self {
             const ptr_addr = @intFromPtr(self) + header_size;
             const ptr: [*]?*Self = @ptrFromInt(ptr_addr);
-            return ptr[0..self.height];
+            return ptr[0..self.levels];
         }
 
         fn setNext(self: *Self, level: u8, next: ?*Self) void {
@@ -51,22 +51,21 @@ pub fn SkipList(
             next.setNext(level, current_next);
         }
 
-        fn create(allocator: mem.Allocator, data: ?T, height: u8) !*Self {
-            const node_size = header_size + (@sizeOf(?*Self) * height);
+        fn create(allocator: mem.Allocator, data: ?T, levels: u8) !*Self {
+            const node_size = header_size + (@sizeOf(?*Self) * levels);
             const bytes = try allocator.alignedAlloc(u8, alignment, node_size);
             const node: *Self = @ptrCast(@alignCast(bytes.ptr));
 
-            node.* = .{ .data = data, .height = height };
+            node.* = .{ .data = data, .levels = levels };
             // Initialize the trailing pointers to null
-            for (0..node.height) |i| {
-                // std.debug.print("here\n", .{});
+            for (0..node.levels) |i| {
                 node.setNext(@as(u8, @intCast(i)), null);
             }
             return node;
         }
 
         fn destroy(allocator: mem.Allocator, node: *Self) void {
-            const node_size = header_size + (@sizeOf(?*Self) * node.height);
+            const node_size = header_size + (@sizeOf(?*Self) * node.levels);
             const bytes_ptr: [*]align(alignment.toByteUnits()) u8 = @ptrCast(node);
             const original_allocation = bytes_ptr[0..node_size];
             allocator.free(original_allocation);
@@ -77,7 +76,7 @@ pub fn SkipList(
         head: *Node,
         lock: thread.RwLock,
         prng: std.Random,
-        len: usize = 2,
+        len: usize = 1,
         const Self = @This();
         const compare = cmp;
 
@@ -87,7 +86,7 @@ pub fn SkipList(
         pub fn init(allocator: mem.Allocator, prng: std.Random) !Self {
             logger.debug("initialising the skiplist", .{});
             const head = try Node.create(allocator, null, max_levels);
-            errdefer allocator.destroy(head);
+            errdefer Node.destroy(allocator, head);
             return .{ .allocator = allocator, .head = head, .lock = .{}, .prng = prng };
         }
 
@@ -137,17 +136,18 @@ pub fn SkipList(
             // last element in the stack, insert element after it
             // run prng, if > 0.5, pop last element and continue else break
             //
-            curr_level = 0;
-            const node = try Node.create(self.allocator, element, max_levels);
-            errdefer self.allocator.destroy(node);
-
-            while (stack.items.len > 0) {
-                const elem = stack.pop().?;
-                const should_insert = if (curr_level == 0) true else self.prng.boolean();
+            var levels: u8 = 1;
+            while (levels < stack.items.len) {
+                const should_insert = self.prng.boolean();
                 if (!should_insert) break;
+                levels += 1;
+            }
+            const node = try Node.create(self.allocator, element, levels);
+            errdefer Node.destroy(self.allocator, node);
 
-                elem.insertNext(curr_level, node);
-                curr_level += 1;
+            for (0..levels) |level| {
+                const elem = stack.pop().?;
+                elem.insertNext(@as(u8, @intCast(level)), node);
             }
 
             self.len += 1;
@@ -162,7 +162,7 @@ pub fn SkipList(
                 curr = self.head;
                 while (curr != null) {
                     std.debug.print("{any} -> ", .{curr.?.data});
-                    curr = curr.?.next[current_level - 1];
+                    curr = curr.?.getNext(current_level - 1);
                 }
                 std.debug.print("\n", .{});
 
@@ -191,13 +191,15 @@ test "sanity test insert int" {
     var l = try SkipList(u32, 12, u32Compare).init(allocator, random);
     defer l.deinit();
 
-    for (0..1000) |_| {
+    const num_inserts = 1000;
+    for (0..num_inserts) |_| {
         const num = random.int(u32);
         try l.insert(num);
     }
 
     var curr: ?@TypeOf(l.head) = l.head;
     const current_level = 0;
+    var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
     while (curr != null) {
         if (prev != null and curr.?.data != null and prev.?.data != null) {
@@ -205,7 +207,11 @@ test "sanity test insert int" {
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
+        total_count += 1;
     }
+
+    // -1 for head
+    try testing.expect(total_count - 1 == num_inserts);
     // l.debugPrint();
 }
 
@@ -226,7 +232,8 @@ test "sanity test insert string" {
     }
 
     var str: []u8 = undefined;
-    for (0..1000) |_| {
+    const num_inserts = 1000;
+    for (0..num_inserts) |_| {
         str = try allocator.create([10]u8);
         random.bytes(str);
         try managed.append(str);
@@ -234,6 +241,7 @@ test "sanity test insert string" {
     }
     var curr: ?@TypeOf(l.head) = l.head;
     const current_level = 0;
+    var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
     while (curr != null) {
         if (prev != null and curr.?.data != null and prev.?.data != null) {
@@ -242,6 +250,9 @@ test "sanity test insert string" {
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
+        total_count += 1;
     }
+    // -1 for head
+    try testing.expect(total_count - 1 == num_inserts);
     // l.debugPrint();
 }
