@@ -4,6 +4,7 @@ const mem = std.mem;
 const math = std.math;
 const thread = std.Thread;
 const testing = std.testing;
+const assert = std.debug.assert;
 
 const logger = log.scoped(.skiplist);
 
@@ -12,7 +13,6 @@ const logger = log.scoped(.skiplist);
 /// TODO:
 /// - We can potentially make it lock free. But before going lockfree, add a benchmark setup
 /// - Make sure we support single item pointers as keys (copied during insert), and not only slices
-/// - Add support for storing values as well.
 /// - Add get and delete
 /// - Add prefetch when we are iterating through a node
 pub fn SkipList(
@@ -37,17 +37,8 @@ pub fn SkipList(
         const value_is_slice = @typeInfo(V) == .pointer and @typeInfo(V).pointer.size == .slice;
 
         key: ?K,
-        // value: ?V,
+        value: ?V,
         levels: u8,
-
-        fn get_value(self: *Self) ?V {
-            const ptr_addr = @intFromPtr(self) +
-                _get_header_size(self.key) +
-                _get_key_size(self.key) +
-                _get_nexts_size(self.levels);
-            const value: ?V = @ptrFromInt(ptr_addr);
-            return value;
-        }
 
         fn _get_nexts_size(levels: u8) usize {
             return mem.alignForward(usize, levels * @sizeOf(*Self), _get_value_alignment_needed());
@@ -142,24 +133,30 @@ pub fn SkipList(
             return @max(self_alignment_needed, self_ptrs_alignment_needed, key_alignment_needed, value_alignment_needed);
         }
 
-        fn create(allocator: mem.Allocator, data: ?K, levels: u8) !*Self {
+        fn create(allocator: mem.Allocator, key: ?K, value: ?V, levels: u8) !*Self {
             if (levels == 0) return error.ZERO_LEVELS_NOT_ALLOWED;
-            const node_size = _get_node_size(levels, data, null);
-            logger.debug("node size in bytes: {d}, data: {any}", .{ node_size, data });
+            const node_size = _get_node_size(levels, key, value);
+            logger.debug("node size in bytes: {d}, data: {any}", .{ node_size, key });
             const bytes = try allocator
                 .alignedAlloc(u8, comptime mem.Alignment.fromByteUnits(_get_total_alignment_needed()), node_size);
             const node: *Self = @ptrCast(@alignCast(bytes.ptr));
 
-            node.* = .{ .key = data, .levels = levels };
+            node.* = .{ .key = key, .levels = levels, .value = value };
 
-            const header_size = _get_header_size(data);
-
-            if (data != null and key_is_slice) {
-                // since we store child the data is pointing to as well, we need to update header alignment.
+            const header_size = _get_header_size(key);
+            if (key != null and key_is_slice) {
                 const child_data: [*]@typeInfo(K).pointer.child = @ptrFromInt(@intFromPtr(bytes.ptr) + header_size);
-                const dest = child_data[0..data.?.len];
-                @memcpy(dest, data.?);
+                const dest = child_data[0..key.?.len];
+                @memcpy(dest, key.?);
                 node.key = dest;
+            }
+
+            if (value != null and value_is_slice) {
+                const body_size = header_size + _get_key_size(key) + _get_nexts_size(levels);
+                const child_data: [*]@typeInfo(V).pointer.child = @ptrFromInt(@intFromPtr(bytes.ptr) + body_size);
+                const dest = child_data[0..value.?.len];
+                @memcpy(dest, value.?);
+                node.value = dest;
             }
 
             // Initialize the trailing pointers to null
@@ -170,7 +167,7 @@ pub fn SkipList(
         }
 
         fn destroy(allocator: mem.Allocator, node: *Self) void {
-            const node_size = _get_node_size(node.levels, node.key, null);
+            const node_size = _get_node_size(node.levels, node.key, node.value);
             const bytes_ptr: [*]align(_get_total_alignment_needed()) u8 = @ptrCast(@alignCast(node));
             const original_allocation = bytes_ptr[0..node_size];
             allocator.free(original_allocation);
@@ -190,12 +187,15 @@ pub fn SkipList(
         /// TODO(verify): I think using a fixed buffer allocator here would increase cache hit rate.
         pub fn init(allocator: mem.Allocator, prng: std.Random) !Self {
             logger.debug("initialising the skiplist", .{});
-            const head = try Node.create(allocator, null, max_levels);
+            const head = try Node.create(allocator, null, null, max_levels);
             errdefer Node.destroy(allocator, head);
             return .{ .allocator = allocator, .head = head, .lock = .{}, .prng = prng };
         }
 
-        pub fn len(self: *const Self) usize {
+        // consider making len return an atomic load
+        pub fn len(self: *Self) usize {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
             return self._len;
         }
 
@@ -211,8 +211,8 @@ pub fn SkipList(
         }
 
         /// insert element into the skip list.
-        pub fn insert(self: *Self, element: K) !void {
-            logger.debug("adding item: {any}", .{element});
+        pub fn insert(self: *Self, key: K, value: V) !void {
+            logger.debug("adding item: {any}", .{key});
             self.lock.lock();
             defer self.lock.unlock();
 
@@ -229,7 +229,7 @@ pub fn SkipList(
             var curr_level = max_levels;
             while (curr_level > 0) {
                 const next = curr_node.getNext(curr_level - 1);
-                const cmp_result: ?math.Order = if (next != null) compare(&next.?.key.?, &element) else null;
+                const cmp_result: ?math.Order = if (next != null) compare(&next.?.key.?, &key) else null;
                 if (next != null and (cmp_result == .lt or cmp_result == .eq)) {
                     curr_node = next.?;
                 } else {
@@ -238,6 +238,7 @@ pub fn SkipList(
                     stack[@as(usize, @intCast(stack_idx))] = curr_node;
                 }
             }
+            assert(stack_idx == max_levels - 1);
 
             // insertion logic:
             // while elements in stack
@@ -250,7 +251,7 @@ pub fn SkipList(
                 if (!should_insert) break;
                 levels += 1;
             }
-            const node = try Node.create(self.allocator, element, levels);
+            const node = try Node.create(self.allocator, key, value, levels);
             errdefer Node.destroy(self.allocator, node);
 
             for (0..levels) |level| {
@@ -262,7 +263,7 @@ pub fn SkipList(
             self._len += 1;
         }
 
-        /// A very basic debug print
+        /// A very basic debug print, not thread safe
         /// We need to improve it
         pub fn debugPrint(self: *const Self) void {
             var curr: ?*Node = self.head;
@@ -282,11 +283,6 @@ pub fn SkipList(
 }
 
 pub fn bytesCompare(a: *const []const u8, b: *const []const u8) math.Order {
-    // switch (mem.order(u8, a.*, b.*)) {
-    //     .gt => return false,
-    //     .eq => return @intFromPtr(a.ptr) < @intFromPtr(b.ptr),
-    //     .lt => return true,
-    // }
     return mem.order(u8, a.*, b.*);
 }
 
@@ -298,22 +294,24 @@ test "sanity test insert int" {
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(@as(u64, testing.random_seed));
     var random = prng.random();
-    var l = try SkipList(u32, []const u8, 12, u32Compare).init(allocator, random);
+    var l = try SkipList(u32, u32, 12, u32Compare).init(allocator, random);
     defer l.deinit();
 
     const num_inserts = 10_000;
     for (0..num_inserts) |_| {
         const num = random.int(u32);
-        try l.insert(num);
+        try l.insert(num, num % 100);
     }
 
     var curr: ?@TypeOf(l.head) = l.head;
     const current_level = 0;
     var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
+    try testing.expect(l.len() == num_inserts);
     while (curr != null) {
         if (prev != null and prev != l.head) {
             try testing.expect(prev.?.key.? <= curr.?.key.?);
+            try testing.expect(curr.?.key.? % 100 == curr.?.value.?);
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
@@ -332,19 +330,24 @@ test "sanity test insert string" {
     var l = try SkipList([]const u8, []const u8, 12, bytesCompare).init(allocator, random);
     defer l.deinit();
 
-    var str: [100]u8 = undefined;
+    var key: [100]u8 = undefined;
     const num_inserts = 10_000;
     for (0..num_inserts) |_| {
-        random.bytes(&str);
-        try l.insert(&str);
+        random.bytes(&key);
+        // being lazy and inserting the same in both, sorries, bad test
+        try l.insert(&key, &key);
     }
     var curr: ?@TypeOf(l.head) = l.head;
     const current_level = 0;
     var total_count: u32 = 0;
     var prev: ?@TypeOf(l.head) = null;
+    var c: usize = 0;
+    try testing.expect(l.len() == num_inserts);
     while (curr != null) {
+        c += 1;
         if (prev != null and prev != l.head) {
             try testing.expect(bytesCompare(&prev.?.key.?, &curr.?.key.?) == .lt or bytesCompare(&prev.?.key.?, &curr.?.key.?) == .eq);
+            try testing.expect(bytesCompare(&curr.?.key.?, &curr.?.value.?) == .eq);
         }
         prev = curr;
         curr = curr.?.getNext(current_level);
