@@ -11,10 +11,10 @@ const logger = log.scoped(.skiplist);
 /// A thread safe skip list implementation
 ///
 /// TODO:
-/// - We can potentially make it lock free. But before going lockfree, add a benchmark setup
-/// - Make sure we support single item pointers as keys (copied during insert), and not only slices
+/// - Make sure we support single item pointers and multi item pointers as keys and values (copied during insert), and not only slices
 /// - Add get and delete
 /// - Add prefetch when we are iterating through a node
+/// - We can potentially make it lock free. But before going lockfree, add a benchmark setup
 pub fn SkipList(
     comptime K: type,
     comptime V: type,
@@ -199,6 +199,36 @@ pub fn SkipList(
             return self._len;
         }
 
+        /// returns the first element's value which matches key
+        /// TODO: implement getAll
+        pub fn get(self: *Self, key: K) ?*const V {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+            var curr_level = max_levels;
+            var curr: ?*Node = self.head;
+            while (curr_level > 0 and curr != null) {
+                const next = curr.?.getNext(curr_level - 1);
+                if (next == null) {
+                    curr_level -= 1;
+                } else {
+                    const order = compare(&next.?.key.?, &key);
+                    switch (order) {
+                        // If we iterate on the oth level here, we will get all the values.
+                        // will help implement getAll
+                        .eq => return &next.?.value.?,
+                        .lt => {
+                            curr = next;
+                        },
+                        .gt => {
+                            curr_level -= 1;
+                        },
+                    }
+                }
+            }
+
+            return null;
+        }
+
         pub fn deinit(self: *Self) void {
             logger.debug("deinitialising the skiplist", .{});
 
@@ -356,4 +386,40 @@ test "sanity test insert string" {
     // -1 for head
     try testing.expect(total_count - 1 == num_inserts);
     // l.debugPrint();
+}
+
+test "get test for (int, int) Skip List" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(testing.random_seed);
+    const random = prng.random();
+
+    var sl = try SkipList(u32, u32, 12, u32Compare).init(allocator, random);
+    defer sl.deinit();
+
+    try sl.insert(100, 200);
+    try sl.insert(69, 420);
+    try sl.insert(27, 1999);
+
+    try testing.expect(sl.get(100).?.* == 200);
+    try testing.expect(sl.get(69).?.* == 420);
+    try testing.expect(sl.get(27).?.* == 1999);
+    try testing.expect(sl.get(4) == null);
+}
+
+test "get test for (string, string) Skip List" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(testing.random_seed);
+    const random = prng.random();
+
+    var sl = try SkipList([]const u8, []const u8, 12, bytesCompare).init(allocator, random);
+    defer sl.deinit();
+
+    try sl.insert("100", "200");
+    try sl.insert("69", "420");
+    try sl.insert("27", "1999");
+
+    try testing.expect(mem.eql(u8, sl.get("100").?.*, "200"));
+    try testing.expect(mem.eql(u8, sl.get("69").?.*, "420"));
+    try testing.expect(mem.eql(u8, sl.get("27").?.*, "1999"));
+    try testing.expect(sl.get("4") == null);
 }
